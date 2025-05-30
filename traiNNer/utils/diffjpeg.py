@@ -7,7 +7,7 @@ https://dsp.stackexchange.com/questions/35339/jpeg-dct-padding/35343#35343
 
 import itertools
 from collections.abc import Callable
-from typing import TypeVar
+from typing import NamedTuple, TypeVar
 
 import numpy as np
 import torch
@@ -35,6 +35,19 @@ c_table_arr[:4, :4] = np.array(
     [[17, 18, 24, 47], [18, 21, 26, 66], [24, 26, 56, 99], [47, 66, 99, 99]]
 ).T
 c_table = nn.Parameter(torch.from_numpy(c_table_arr))
+
+
+class Subsampling(NamedTuple):
+    hhalve: bool
+    vhalve: bool
+
+    @property
+    def factors(self) -> tuple[int, int]:
+        """
+        Returns:
+            tuple[int, int]: (vertical scale, horizontal scale)
+        """
+        return 2 if self.vhalve else 1, 2 if self.hhalve else 1
 
 
 def diff_round(x: Tensor) -> Tensor:
@@ -97,10 +110,13 @@ class ChromaSubsampling(nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
-    def forward(self, image: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    def forward(
+        self, image: Tensor, chroma: Subsampling
+    ) -> tuple[Tensor, Tensor, Tensor]:
         """
         Args:
             image(tensor): batch x height x width x 3
+            chroma (Chroma): whether to halve chroma vertically/horizontally
 
         Returns:
             y(tensor): batch x height x width
@@ -108,16 +124,15 @@ class ChromaSubsampling(nn.Module):
             cr(tensor): batch x height/2 x width/2
         """
         image_2 = image.permute(0, 3, 1, 2).clone()
+        kernel_size = chroma.factors
         cb = F.avg_pool2d(
             image_2[:, 1, :, :].unsqueeze(1),
-            kernel_size=2,
-            stride=(2, 2),
+            kernel_size=kernel_size,
             count_include_pad=False,
         )
         cr = F.avg_pool2d(
             image_2[:, 2, :, :].unsqueeze(1),
-            kernel_size=2,
-            stride=(2, 2),
+            kernel_size=kernel_size,
             count_include_pad=False,
         )
         cb = cb.permute(0, 2, 3, 1)
@@ -246,22 +261,25 @@ class CompressJpeg(nn.Module):
 
     def __init__(self, rounding: Callable[[Tensor], Tensor] = torch.round) -> None:
         super().__init__()
-        self.l1 = nn.Sequential(RGB2YCbCrJpeg(), ChromaSubsampling())
+        self.rgb2ycbcr = RGB2YCbCrJpeg()
+        self.chroma = ChromaSubsampling()
         self.l2 = nn.Sequential(BlockSplitting(), DCT8x8())
         self.c_quantize = CQuantize(rounding=rounding)
         self.y_quantize = YQuantize(rounding=rounding)
 
     def forward(
-        self, image: Tensor, factor: float = 1
+        self, image: Tensor, chroma: Subsampling, factor: float = 1
     ) -> tuple[Tensor, Tensor, Tensor]:
         """
         Args:
             image(tensor): batch x 3 x height x width
+            chroma (Chroma): whether to halve chroma vertically/horizontally
 
         Returns:
             dict(tensor): Compressed tensor with batch x h*w/64 x 8 x 8.
         """
-        y, cb, cr = self.l1(image * 255)
+        ycbcr = self.rgb2ycbcr(image * 255)
+        y, cb, cr = self.chroma(ycbcr, chroma=chroma)
         components = {"y": y, "cb": cb, "cr": cr}
         for k, _ in components.items():
             comp = self.l2(components[k])
@@ -383,22 +401,25 @@ class ChromaUpsampling(nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
-    def forward(self, y: Tensor, cb: Tensor, cr: Tensor) -> Tensor:
+    def forward(self, y: Tensor, cb: Tensor, cr: Tensor, chroma: Subsampling) -> Tensor:
         """
         Args:
             y(tensor): y channel image
             cb(tensor): cb channel
             cr(tensor): cr channel
+            chroma (Chroma): whether to halve chroma vertically/horizontally
 
         Returns:
             Tensor: batch x height x width x 3
         """
 
-        def repeat(x: Tensor, k: int = 2) -> Tensor:
+        vf, hf = chroma.factors
+
+        def repeat(x: Tensor) -> Tensor:
             height, width = x.shape[1:3]
             x = x.unsqueeze(-1)
-            x = x.repeat(1, 1, k, k)
-            x = x.view(-1, height * k, width * k)
+            x = x.repeat(1, 1, vf, hf)
+            x = x.view(-1, height * vf, width * hf)
             return x
 
         cb = repeat(cb)
@@ -448,7 +469,14 @@ class DeCompressJpeg(nn.Module):
         self.colors = YCbCr2RGBJpeg()
 
     def forward(
-        self, y: Tensor, cb: Tensor, cr: Tensor, imgh: int, imgw: int, factor: float = 1
+        self,
+        y: Tensor,
+        cb: Tensor,
+        cr: Tensor,
+        imgh: int,
+        imgw: int,
+        chroma: Subsampling,
+        factor: float = 1,
     ) -> Tensor:
         """
         Args:
@@ -464,13 +492,14 @@ class DeCompressJpeg(nn.Module):
         for k, _ in components.items():
             if k in ("cb", "cr"):
                 comp = self.c_dequantize(components[k], factor=factor)
-                height, width = int(imgh / 2), int(imgw / 2)
+                vf, hf = chroma.factors
+                height, width = imgh // vf, imgw // hf
             else:
                 comp = self.y_dequantize(components[k], factor=factor)
                 height, width = imgh, imgw
             comp = self.idct(comp)
             components[k] = self.merging(comp, height, width)
-        image = self.chroma(components["y"], components["cb"], components["cr"])
+        image = self.chroma(components["y"], components["cb"], components["cr"], chroma)
         image = self.colors(image)
 
         image = torch.min(
@@ -500,11 +529,12 @@ class DiffJPEG(nn.Module):
         self.compress = CompressJpeg(rounding=rounding)
         self.decompress = DeCompressJpeg(rounding=rounding)
 
-    def forward(self, x: Tensor, quality: float | Tensor) -> Tensor:
+    def forward(self, x: Tensor, quality: float | Tensor, subsampling: str) -> Tensor:
         """
         Args:
             x (Tensor): Input image, bchw, rgb, [0, 1]
             quality(float): Quality factor for jpeg compression scheme.
+            subsampling (str): Chroma subsampling mode. 4:4:4, 4:4:0, 4:2:2, and 4:2:0 are supported.
         """
         factor = quality
         if isinstance(factor, int | float):
@@ -512,6 +542,13 @@ class DiffJPEG(nn.Module):
         else:
             for i in range(factor.size(0)):
                 factor[i] = quality_to_factor(factor[i])
+        chroma = {
+            "4:4:4": Subsampling(False, False),
+            "4:4:0": Subsampling(False, True),
+            "4:2:2": Subsampling(True, False),
+            "4:2:0": Subsampling(True, True),
+        }[subsampling]
+
         h, w = x.size()[-2:]
         h_pad, w_pad = 0, 0
         # why should use 16
@@ -521,7 +558,9 @@ class DiffJPEG(nn.Module):
             w_pad = 16 - w % 16
         x = F.pad(x, (0, w_pad, 0, h_pad), mode="constant", value=0)
 
-        y, cb, cr = self.compress(x, factor=factor)
-        recovered = self.decompress(y, cb, cr, (h + h_pad), (w + w_pad), factor=factor)
+        y, cb, cr = self.compress(x, chroma=chroma, factor=factor)
+        recovered = self.decompress(
+            y, cb, cr, (h + h_pad), (w + w_pad), chroma=chroma, factor=factor
+        )
         recovered = recovered[:, :, 0:h, 0:w]
         return recovered

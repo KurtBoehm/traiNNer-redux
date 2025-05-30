@@ -555,11 +555,23 @@ class ReduxOptions(StrictStruct):
         ),
     ] = 1
     jpeg_range: Annotated[
-        tuple[float, float],
+        tuple[int, int],
         Meta(
             description="The range of JPEG quality to apply for the first JPEG degradation, in the format `[min_quality, max_quality]`."
         ),
     ] = (75, 95)
+    jpeg_subsample_list: Annotated[
+        list[Literal["4:4:4", "4:4:0", "4:2:2", "4:2:0"]],
+        Meta(
+            description="List of possible JPEG chroma subsampling modes to use for the first JPEG degradation."
+        ),
+    ] = field(default_factory=lambda: ["4:4:4", "4:4:0", "4:2:2", "4:2:0"])
+    jpeg_subsample_prob: Annotated[
+        list[float],
+        Meta(
+            description="List of probabilities for the first JPEG degradation of selecting the corresponding JPEG chroma subsampling in `jpeg_subsample_list`."
+        ),
+    ] = field(default_factory=lambda: [0.45, 0.05, 0.05, 0.45])
 
     blur_prob2: Annotated[
         float,
@@ -607,11 +619,23 @@ class ReduxOptions(StrictStruct):
         ),
     ] = 1
     jpeg_range2: Annotated[
-        list[float],
+        tuple[int, int],
         Meta(
             description="The range of JPEG quality to apply for the second JPEG degradation, in the format `[min_quality, max_quality]`."
         ),
-    ] = field(default_factory=lambda: [75, 95])
+    ] = field(default_factory=lambda: (75, 95))
+    jpeg_subsample_list2: Annotated[
+        list[Literal["4:4:4", "4:4:0", "4:2:2", "4:2:0"]],
+        Meta(
+            description="List of possible JPEG chroma subsampling modes to use for the second JPEG degradation."
+        ),
+    ] = field(default_factory=lambda: ["4:4:4", "4:4:0", "4:2:2", "4:2:0"])
+    jpeg_subsample_prob2: Annotated[
+        list[float],
+        Meta(
+            description="List of probabilities for the second JPEG degradation of selecting the corresponding JPEG chroma subsampling in `jpeg_subsample_list2`."
+        ),
+    ] = field(default_factory=lambda: [0.45, 0.05, 0.05, 0.45])
 
     resize_mode_list3: Annotated[
         list[Literal["bilinear", "bicubic", "nearest-exact", "lanczos"]],

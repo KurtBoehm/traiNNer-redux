@@ -206,10 +206,13 @@ class RealESRGANModel(SRModel):
             # JPEG compression
             if RNG.get_rng().uniform() < self.opt.jpeg_prob:
                 jpeg_p = out.new_zeros(out.size(0)).uniform_(*self.opt.jpeg_range)
+                subsampling = RNG.get_rng().choice(
+                    self.opt.jpeg_subsample_list, p=self.opt.jpeg_subsample_prob
+                )
                 out = torch.clamp(
                     out, 0, 1
                 )  # clamp to [0, 1], otherwise JPEGer will result in unpleasant artifacts
-                out = self.jpeger(out, quality=jpeg_p)
+                out = self.jpeger(out, quality=jpeg_p, subsampling=subsampling)
 
             # ----------------------- The second degradation process ----------------------- #
             # blur
@@ -286,14 +289,20 @@ class RealESRGANModel(SRModel):
                 # JPEG compression
                 if RNG.get_rng().uniform() < self.opt.jpeg_prob2:
                     jpeg_p = out.new_zeros(out.size(0)).uniform_(*self.opt.jpeg_range2)
+                    subsampling = RNG.get_rng().choice(
+                        self.opt.jpeg_subsample_list2, p=self.opt.jpeg_subsample_prob2
+                    )
                     out = torch.clamp(out, 0, 1)
-                    out = self.jpeger(out, quality=jpeg_p)
+                    out = self.jpeger(out, quality=jpeg_p, subsampling=subsampling)
             else:
                 # JPEG compression
                 if RNG.get_rng().uniform() < self.opt.jpeg_prob2:
                     jpeg_p = out.new_zeros(out.size(0)).uniform_(*self.opt.jpeg_range2)
+                    subsampling = RNG.get_rng().choice(
+                        self.opt.jpeg_subsample_list2, p=self.opt.jpeg_subsample_prob2
+                    )
                     out = torch.clamp(out, 0, 1)
-                    out = self.jpeger(out, quality=jpeg_p)
+                    out = self.jpeger(out, quality=jpeg_p, subsampling=subsampling)
                 # resize back + the final sinc filter
                 out = resize_pt(
                     out,

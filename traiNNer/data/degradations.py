@@ -914,7 +914,11 @@ def random_add_poisson_noise_pt(
 # ------------------------------------------------------------------------ #
 
 
-def add_jpg_compression(img: np.ndarray, quality: float = 90) -> np.ndarray:
+def add_jpg_compression(
+    img: np.ndarray,
+    quality: int = 90,
+    resampling: str = "4:2:0",
+) -> np.ndarray:
     """Add JPG compression artifacts.
 
     Args:
@@ -927,14 +931,28 @@ def add_jpg_compression(img: np.ndarray, quality: float = 90) -> np.ndarray:
             float32.
     """
     img = np.clip(img, 0, 1)
-    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)]
+    sfactor = {
+        "4:1:1": cv2.IMWRITE_JPEG_SAMPLING_FACTOR_411,
+        "4:2:0": cv2.IMWRITE_JPEG_SAMPLING_FACTOR_420,
+        "4:2:2": cv2.IMWRITE_JPEG_SAMPLING_FACTOR_422,
+        "4:4:0": cv2.IMWRITE_JPEG_SAMPLING_FACTOR_440,
+        "4:4:4": cv2.IMWRITE_JPEG_SAMPLING_FACTOR_444,
+    }
+    encode_param = (
+        cv2.IMWRITE_JPEG_QUALITY,
+        quality,
+        cv2.IMWRITE_JPEG_SAMPLING_FACTOR,
+        sfactor[resampling],
+    )
     _, encimg = cv2.imencode(".jpg", img * 255.0, encode_param)
     img = np.asarray(cv2.imdecode(encimg, 1)).astype(np.float32) / 255.0
     return img
 
 
 def random_add_jpg_compression(
-    img: np.ndarray, quality_range: tuple[float, float] | list[float] = (90, 100)
+    img: np.ndarray,
+    quality_range: tuple[int, int] | list[int] = (90, 100),
+    resamplings: list[str] | None = None,
 ) -> np.ndarray:
     """Randomly add JPG compression artifacts.
 
@@ -948,8 +966,12 @@ def random_add_jpg_compression(
         (Numpy array): Returned image after JPG, shape (h, w, c), range[0, 1],
             float32.
     """
-    quality = RNG.get_rng().uniform(quality_range[0], quality_range[1])
-    return add_jpg_compression(img, quality)
+    quality = RNG.get_rng().integers(quality_range[0], quality_range[1], dtype=int)
+    if resamplings is None:
+        resampling = "4:2:0"
+    else:
+        resampling: str = RNG.get_rng().choice(resamplings)
+    return add_jpg_compression(img, quality, resampling)
 
 
 # ------------------------------------------------------------------------ #
